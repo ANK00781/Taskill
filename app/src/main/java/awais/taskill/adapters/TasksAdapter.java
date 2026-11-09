@@ -21,6 +21,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.widget.PopupMenu;
 import androidx.core.view.GravityCompat;
 import androidx.recyclerview.widget.RecyclerView;
@@ -33,9 +34,11 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -61,43 +64,44 @@ public final class TasksAdapter extends RecyclerView.Adapter<RecyclerView.ViewHo
         final ApplicationInfo appInfo1 = pkgInfo1.applicationInfo;
         final ApplicationInfo appInfo2 = pkgInfo2.applicationInfo;
 
+        final int type1 = getAppTypeRank(appInfo1);
+        final int type2 = getAppTypeRank(appInfo2);
+        if (type1 != type2) return Integer.compare(type1, type2);
+
+        if (sortByRam) {
+            final int ramCompare = Long.compare(getRamUsage(pkgInfo2.packageName), getRamUsage(pkgInfo1.packageName));
+            if (ramCompare != 0) return ramCompare;
+        }
+
         String app1Name = this.packagesHelper.getAppName(appInfo1);
         String app2Name = this.packagesHelper.getAppName(appInfo2);
         if (TextUtils.isEmpty(app1Name)) app1Name = "";
         if (TextUtils.isEmpty(app2Name)) app2Name = "";
 
-        boolean isApp1System = (appInfo1.flags & ApplicationInfo.FLAG_SYSTEM) == ApplicationInfo.FLAG_SYSTEM;
-        boolean isApp2System = (appInfo2.flags & ApplicationInfo.FLAG_SYSTEM) == ApplicationInfo.FLAG_SYSTEM;
-
-        boolean isApp1Updated = (appInfo1.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
-        boolean isApp2Updated = (appInfo2.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
-
-        boolean isApp1User = !isApp1System & !isApp1Updated;
-        boolean isApp2User = !isApp2System & !isApp2Updated;
-
-        if (isApp1User && isApp2User) return 0;
-        if (isApp1User && isApp2Updated) return -1;
-        if (isApp1User && isApp2System) return -1;
-
-        if (isApp1Updated && isApp2User) return 1;
-        if (isApp1Updated && isApp2Updated) return 0;
-        if (isApp1Updated && isApp2System) return -1;
-
-        if (isApp1System && isApp2User) return 1;
-        if (isApp1System && isApp2Updated) return 1;
-        if (isApp1System && isApp2System) return -1;
-
-        final Collator mCollator = Collator.getInstance();
-        mCollator.setStrength(Collator.SECONDARY);
-        return mCollator.compare(app1Name, app2Name);
+        final Collator collator = Collator.getInstance();
+        collator.setStrength(Collator.SECONDARY);
+        return collator.compare(app1Name, app2Name);
     };
     private final MenuItemClickListener menuItemClickListener = new MenuItemClickListener();
     private final HashSet<PackageInfo> runningApps = new HashSet<>(12, 0.95f);
     private final ArrayList<PackageInfo> selectedApps = new ArrayList<>(12);
+    private final HashMap<String, Long> ramUsageCache = new HashMap<>(12, 0.95f);
     private final LayoutInflater layoutInflater;
     private final SettingsHelper settingsHelper;
     private PackagesHelper packagesHelper;
     private List<Object> objectsList;
+    private List<PackageInfo> allPackages;
+    private Map<String, Long> ramUsageMap = Collections.emptyMap();
+    private String filterQuery = "";
+    private boolean sortByRam;
+
+    private static int getAppTypeRank(@NonNull final ApplicationInfo appInfo) {
+        final boolean isAppSystem = (appInfo.flags & ApplicationInfo.FLAG_SYSTEM) == ApplicationInfo.FLAG_SYSTEM;
+        final boolean isAppUpdated = (appInfo.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
+        if (!isAppSystem && !isAppUpdated) return 0;
+        if (isAppUpdated) return 1;
+        return 2;
+    }
 
     public TasksAdapter(final Context context) {
         setHasStableIds(true);
@@ -182,6 +186,15 @@ public final class TasksAdapter extends RecyclerView.Adapter<RecyclerView.ViewHo
             if (showVersionLabel) {
                 taskBinding.tvVersion.setText(format("version: %s {%d}", packageInfo.versionName, packageInfo.versionCode));
                 taskBinding.tvVersion.setSelected(true);
+            }
+
+            final long ramUsage = getRamUsage(packageInfo.packageName);
+            if (ramUsage > 0) {
+                taskBinding.tvRam.setVisibility(View.VISIBLE);
+                taskBinding.tvRam.setText(layoutInflater.getContext().getString(R.string.ram_app_format, Utils.formatBytes(ramUsage)));
+                taskBinding.tvRam.setSelected(true);
+            } else {
+                taskBinding.tvRam.setVisibility(View.GONE);
             }
 
             // set tags
@@ -290,15 +303,66 @@ public final class TasksAdapter extends RecyclerView.Adapter<RecyclerView.ViewHo
         return selectedApps;
     }
 
-    public void setPackageInfos(final List<PackageInfo> packageInfos) {
+    public void setPackageInfos(@Nullable final List<PackageInfo> packageInfos) {
+        this.allPackages = packageInfos;
+        rebuildList();
+    }
+
+    public void setFilterQuery(@Nullable final String query) {
+        final String newQuery = query == null ? "" : query.trim();
+        if (newQuery.equals(this.filterQuery)) return;
+        this.filterQuery = newQuery;
+        rebuildList();
+        refreshList();
+    }
+
+    public boolean isSortByRam() {
+        return sortByRam;
+    }
+
+    public void setSortByRam(final boolean sortByRam) {
+        if (this.sortByRam == sortByRam) return;
+        this.sortByRam = sortByRam;
+        rebuildList();
+        refreshList();
+    }
+
+    public void toggleSortByRam() {
+        setSortByRam(!sortByRam);
+    }
+
+    public void setRamUsageMap(@Nullable final Map<String, Long> ramUsageMap) {
+        this.ramUsageMap = ramUsageMap == null ? Collections.emptyMap() : ramUsageMap;
+        this.ramUsageCache.clear();
+    }
+
+    private long getRamUsage(@Nullable final String packageName) {
+        if (packageName == null || packageName.isEmpty()) return 0L;
+
+        final Long cached = ramUsageCache.get(packageName);
+        if (cached != null) return cached;
+
+        final Long ramUsage = ramUsageMap.get(packageName);
+        final long result = ramUsage == null ? 0L : ramUsage;
+        ramUsageCache.put(packageName, result);
+        return result;
+    }
+
+    private boolean matchesQuery(@NonNull final PackageInfo pkgInfo) {
+        if (TextUtils.isEmpty(filterQuery)) return true;
+        final String query = filterQuery.toLowerCase(Locale.ROOT);
+        final String appName = packagesHelper.getAppName(pkgInfo.applicationInfo);
+        return (appName != null && appName.toLowerCase(Locale.ROOT).contains(query))
+               || (pkgInfo.packageName != null && pkgInfo.packageName.toLowerCase(Locale.ROOT).contains(query));
+    }
+
+    private void rebuildList() {
         this.runningApps.clear();
 
+        final List<PackageInfo> packageInfos = this.allPackages;
         if (packageInfos == null) {
-            if (objectsList != null) {
-                objectsList.clear();
-                objectsList = null;
-            }
-            refreshList();
+            if (objectsList != null) objectsList.clear();
+            objectsList = null;
             return;
         }
 
@@ -317,6 +381,9 @@ public final class TasksAdapter extends RecyclerView.Adapter<RecyclerView.ViewHo
             final boolean isAppRunning = (appInfo.flags & ApplicationInfo.FLAG_STOPPED) != ApplicationInfo.FLAG_STOPPED;
             final boolean isAppSystem = (appInfo.flags & ApplicationInfo.FLAG_SYSTEM) == ApplicationInfo.FLAG_SYSTEM;
             final boolean isAppUpdated = (appInfo.flags & ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == ApplicationInfo.FLAG_UPDATED_SYSTEM_APP;
+
+            if (isAppRunning && !isExcluded) this.runningApps.add(pkgInfo);
+            if (!matchesQuery(pkgInfo)) continue;
 
             if (isExcluded) {
                 excludedApps.add(pkgInfo);
@@ -347,7 +414,6 @@ public final class TasksAdapter extends RecyclerView.Adapter<RecyclerView.ViewHo
         final List<Object> allObjects = new ArrayList<>(Math.max(0, runningApps.size() + updatedApps.size() + systemApps.size() + userApps.size()
                                                                     + excludedApps.size() - 1));
         if (!runningApps.isEmpty()) {
-            this.runningApps.addAll(runningApps);
             allObjects.add("[ RUNNING APPS (" + runningApps.size() + ") ]");
             allObjects.addAll(runningApps);
         }

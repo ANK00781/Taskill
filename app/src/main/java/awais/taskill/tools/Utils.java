@@ -34,8 +34,13 @@ import com.google.android.material.shape.MaterialShapeDrawable;
 import com.google.android.material.shape.ShapeAppearanceModel;
 import com.topjohnwu.superuser.Shell;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import awais.taskill.R;
 
@@ -84,6 +89,56 @@ public final class Utils {
         output.trimToSize();
 
         return output.toString().trim();
+    }
+
+    /**
+     * Reads the resident memory (PSS) used by each app process.
+     * The returned map is keyed by package name and the values are in bytes.
+     * An empty map is returned when the information could not be retrieved.
+     */
+    @NonNull
+    public static Map<String, Long> getRamUsagePerApp() {
+        final HashMap<String, Long> ramUsage = new HashMap<>();
+        try {
+            Shell shell = Shell.getCachedShell();
+            if (shell == null) shell = Shell.getShell();
+            if (shell == null) return ramUsage;
+
+            final String output = getOutputFromShell(shell, "dumpsys meminfo");
+            if (TextUtils.isEmpty(output)) return ramUsage;
+
+            final Matcher matcher = Pattern.compile("^\\s*([\\d,]+)K:\\s+(\\S+)\\s+\\(pid\\s+\\d+", Pattern.MULTILINE).matcher(output);
+            while (matcher.find()) {
+                final String processName = matcher.group(2);
+                if (TextUtils.isEmpty(processName)) continue;
+
+                long pss;
+                try {
+                    pss = Long.parseLong(matcher.group(1).replace(",", "")) * 1024L;
+                } catch (final NumberFormatException e) {
+                    continue;
+                }
+                if (pss <= 0) continue;
+
+                String packageName = processName;
+                final int colonIndex = packageName.indexOf(':');
+                if (colonIndex != -1) packageName = packageName.substring(0, colonIndex);
+
+                final Long previous = ramUsage.get(packageName);
+                ramUsage.put(packageName, previous == null ? pss : previous + pss);
+            }
+        } catch (final Throwable e) {
+            // ignore, RAM usage is an optional feature
+        }
+        return ramUsage;
+    }
+
+    @NonNull
+    public static String formatBytes(final long bytes) {
+        final double mb = bytes / (1024d * 1024d);
+        if (mb >= 1024d) return String.format(Locale.ROOT, "%.1f GB", mb / 1024d);
+        if (mb > 0d && mb < 1d) return String.format(Locale.ROOT, "%.0f KB", bytes / 1024d);
+        return String.format(Locale.ROOT, "%.0f MB", mb);
     }
 
     public static boolean isExcluded(@NonNull final Set<String> excludedPackages, @NonNull final PackageInfo pkgInfo) {

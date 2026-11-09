@@ -3,6 +3,8 @@ package awais.taskill.activities;
 import static awais.taskill.dialogs.BaseBottomSheetDialog.DialogType;
 
 import android.annotation.SuppressLint;
+import android.app.ActivityManager;
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.os.Build;
@@ -13,6 +15,7 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.CompoundButton;
+import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
 import androidx.activity.OnBackPressedCallback;
@@ -22,6 +25,7 @@ import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 import androidx.appcompat.widget.LinearLayoutCompat;
+import androidx.appcompat.widget.SearchView;
 import androidx.core.graphics.Insets;
 import androidx.core.util.TypedValueCompat;
 import androidx.core.view.ViewCompat;
@@ -36,6 +40,8 @@ import com.topjohnwu.superuser.internal.UiThreadHandler;
 
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import awais.taskill.R;
@@ -150,6 +156,7 @@ public final class Main extends AppCompatActivity implements SwipeRefreshLayout.
         mainBinding.cbSystemProviders.setChecked(showSystemProviders);
 
         setContentView(bindingRoot);
+        updateRamStatus();
     }
 
     @Override
@@ -210,12 +217,43 @@ public final class Main extends AppCompatActivity implements SwipeRefreshLayout.
     @Override
     public boolean onCreateOptionsMenu(@NonNull final Menu menu) {
         getMenuInflater().inflate(R.menu.main_menu, menu);
+
+        final MenuItem searchItem = menu.findItem(R.id.mSearch);
+        if (searchItem != null) {
+            final View actionView = searchItem.getActionView();
+            if (actionView instanceof SearchView) {
+                final SearchView searchView = (SearchView) actionView;
+                searchView.setQueryHint(getString(R.string.search_apps_hint));
+                searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
+                    @Override
+                    public boolean onQueryTextSubmit(final String query) {
+                        if (tasksAdapter != null) tasksAdapter.setFilterQuery(query);
+                        return true;
+                    }
+
+                    @Override
+                    public boolean onQueryTextChange(final String newText) {
+                        if (tasksAdapter != null) tasksAdapter.setFilterQuery(newText);
+                        return true;
+                    }
+                });
+            }
+        }
+
         return true;
     }
 
     @Override
     public boolean onOptionsItemSelected(@NonNull final MenuItem item) {
         int itemId = item.getItemId();
+        if (itemId == R.id.mSort) {
+            if (tasksAdapter != null) {
+                tasksAdapter.toggleSortByRam();
+                final boolean sortByRam = tasksAdapter.isSortByRam();
+                Toast.makeText(this, sortByRam ? R.string.sort_by_ram : R.string.sort_by_name, Toast.LENGTH_SHORT).show();
+            }
+            return true;
+        }
         if (itemId == R.id.mSupport) {
             BaseBottomSheetDialog.showDialog(DialogType.DONATE, this);
             return true;
@@ -285,8 +323,37 @@ public final class Main extends AppCompatActivity implements SwipeRefreshLayout.
     @Override
     public void onRefresh() {
         mainBinding.rlItems.setRefreshing(true);
-        tasksAdapter.setPackageInfos(PackagesHelper.getInstance(this).getAllPackages());
-        tasksAdapter.refreshList();
-        mainBinding.rlItems.setRefreshing(false);
+
+        final Context appContext = getApplicationContext();
+        BackgroundExecutor.getThreadPoolExecutor().execute(() -> {
+            final PackagesHelper packagesHelper = PackagesHelper.getInstance(appContext);
+            final List<PackageInfo> packageInfos = packagesHelper.getAllPackages();
+            final Map<String, Long> ramUsage = Utils.getRamUsagePerApp();
+
+            UiThreadHandler.run(() -> {
+                if (isFinishing() || isDestroyed() || tasksAdapter == null) return;
+                tasksAdapter.setRamUsageMap(ramUsage);
+                tasksAdapter.setPackageInfos(packageInfos);
+                tasksAdapter.refreshList();
+                updateRamStatus();
+                mainBinding.rlItems.setRefreshing(false);
+            });
+        });
+    }
+
+    private void updateRamStatus() {
+        final ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        if (activityManager == null) return;
+
+        final ActivityManager.MemoryInfo memoryInfo = new ActivityManager.MemoryInfo();
+        activityManager.getMemoryInfo(memoryInfo);
+
+        final long total = memoryInfo.totalMem;
+        final long available = memoryInfo.availMem;
+        final long used = Math.max(0L, total - available);
+        final int percent = total > 0L ? (int) Math.min(100L, Math.round(used * 100d / total)) : 0;
+
+        mainBinding.ramProgress.setProgressCompat(percent, true);
+        mainBinding.tvRamStatus.setText(getString(R.string.ram_status_format, Utils.formatBytes(used), Utils.formatBytes(total), percent));
     }
 }

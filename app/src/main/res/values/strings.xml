@@ -16,4 +16,10 @@ making more (maybe even open-source) apps! (:\n\n
 oh and the libraries and their licenses are below:</string>
 
     <string name="app_widget_description">This widget helps force-stop processes</string>
+
+    <string name="ram_status_format">RAM %1$s / %2$s (%3$d%%)</string>
+    <string name="ram_app_format">RAM: %1$s</string>
+    <string name="search_apps_hint">Search apps</string>
+    <string name="sort_by_ram">Sort by RAM usage</string>
+    <string name="sort_by_name">Sort by name</string>
 </resources>

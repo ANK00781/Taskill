@@ -4,6 +4,19 @@
     xmlns:tools="http://schemas.android.com/tools"
     tools:ignore="AlwaysShowAction,HardcodedText">
     <item
+        android:id="@+id/mSearch"
+        android:icon="@drawable/ic_search"
+        android:title="Search"
+        android:titleCondensed="Search"
+        app:actionViewClass="androidx.appcompat.widget.SearchView"
+        app:showAsAction="always" />
+    <item
+        android:id="@+id/mSort"
+        android:icon="@drawable/ic_sort"
+        android:title="Sort by RAM usage"
+        android:titleCondensed="Sort"
+        app:showAsAction="always" />
+    <item
         android:id="@+id/mSupport"
         android:icon="@drawable/buy_me_a_coffee"
         android:title="Support Development"
