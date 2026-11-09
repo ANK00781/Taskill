@@ -40,6 +40,18 @@ android {
         additionalParameters.add('--no-version-vectors')
     }
 
+    def releaseKeystore = System.getenv('KEYSTORE_PATH')
+    if (releaseKeystore != null && !releaseKeystore.isEmpty()) {
+        signingConfigs {
+            release {
+                storeFile file(releaseKeystore)
+                storePassword System.getenv('KEYSTORE_PASSWORD')
+                keyAlias System.getenv('KEY_ALIAS')
+                keyPassword System.getenv('KEY_PASSWORD')
+            }
+        }
+    }
+
     buildTypes {
         debug {
             jniDebuggable true
@@ -50,6 +62,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'awaisome-rules.pro', 'proguard-rules.pro'
+            if (releaseKeystore != null && !releaseKeystore.isEmpty()) signingConfig signingConfigs.release
         }
     }
 
